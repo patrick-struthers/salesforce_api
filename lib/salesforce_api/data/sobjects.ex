@@ -89,7 +89,9 @@ defmodule SalesforceApi.Data.Sobjects do
   def create_field_descriptions(client = %OauthClient{environment: :sandbox}) do
     describe_all_objects(client)
     |> Jason.encode!()
-    |> then(&File.write!(Application.fetch_env!(:salesforce, :sandbox_field_description_file), &1))
+    |> then(
+      &File.write!(Application.fetch_env!(:salesforce, :sandbox_field_description_file), &1)
+    )
   end
 
   @doc """
@@ -101,6 +103,17 @@ defmodule SalesforceApi.Data.Sobjects do
       when request != nil and is_binary(qp) and is_binary(query_string) do
     with {:ok, response} <- Req.get(request, url: qp, params: [q: query_string]),
          do: {:ok, response.body}
+  end
+
+  def make_soql_query(
+        %OauthClient{base_request: request, query_path: qp} = client,
+        query_string,
+        :all
+      )
+      when request != nil and is_binary(qp) and is_binary(query_string) do
+    get_all_records(client, fn client ->
+      make_soql_query(client, query_string)
+    end)
   end
 
   @doc """
@@ -121,7 +134,7 @@ defmodule SalesforceApi.Data.Sobjects do
       %{"done" => false, "records" => new_records, "nextRecordsUrl" => next_record_url} ->
         get_all_records(client, next_record_url, new_records)
 
-      _ -> 
+      _ ->
         raise("invalid response received from SF API: #{inspect(res)}")
     end
   end
@@ -142,5 +155,4 @@ defmodule SalesforceApi.Data.Sobjects do
   defp extract_names(object_list) do
     Enum.map(object_list, fn %{"name" => name} -> name end)
   end
-
 end
