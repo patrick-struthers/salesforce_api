@@ -87,8 +87,11 @@ defmodule SalesforceApi.Data.Sobjects do
 
   @doc """
   Submits a soql query to the SF API endpoint.
-
-  Will only retrieve the first page of results for the query.
+  
+  ## Options
+  - all: if set to true will retrieve all records.
+  - file: if set results will be saved in JSON format to the 
+  file path specified.
   """
   @spec make_soql_query(client :: OauthClient.t(), query_string :: String.t(), opts :: list) ::
           {:ok, term} | {:error, term} | :ok
@@ -120,13 +123,9 @@ defmodule SalesforceApi.Data.Sobjects do
     end
   end
 
-  @doc """
-  Submits a soql query to the SF API endpoint and 
-  retrieves all matching results.
-  """
   @spec make_soql_query_all(client :: OauthClient.t(), query_string :: String.t()) ::
           {:ok, list} | {:error, term}
-  def make_soql_query_all(
+  defp make_soql_query_all(
         %OauthClient{base_request: request, query_path: qp} = client,
         query_string
       )
