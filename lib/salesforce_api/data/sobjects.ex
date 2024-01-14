@@ -76,22 +76,13 @@ defmodule SalesforceApi.Data.Sobjects do
   end
 
   @doc """
-  Retrieves descriptions for all objects and saves them to a json file specified 
-  in config.exs.
+  Retrieves descriptions for all objects and saves them to a json at specified file path.
   """
-  @spec create_field_descriptions(client :: OauthClient.t()) :: atom
-  def create_field_descriptions(client = %OauthClient{environment: :prod}) do
+  @spec create_field_descriptions(client :: OauthClient.t(), file_path :: String.t()) :: atom
+  def create_field_descriptions(client = %OauthClient{}, file_path) do
     describe_all_objects(client)
     |> Jason.encode!()
-    |> then(&File.write!(Application.fetch_env!(:salesforce, :prod_field_description_file), &1))
-  end
-
-  def create_field_descriptions(client = %OauthClient{environment: :sandbox}) do
-    describe_all_objects(client)
-    |> Jason.encode!()
-    |> then(
-      &File.write!(Application.fetch_env!(:salesforce, :sandbox_field_description_file), &1)
-    )
+    |> then(&File.write!(file_path, &1))
   end
 
   @doc """
