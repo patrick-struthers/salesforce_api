@@ -56,7 +56,7 @@ defmodule SalesforceApi.Data.Sobjects do
           {:ok, map} | {:error, term}
   def describe_object(%OauthClient{base_request: request, sobject_path: sop}, field_name) do
     with {:ok, desc} <- Req.request(request, url: Path.join([sop, field_name, "describe"])),
-         do: desc.body
+         do: {:ok, desc.body}
   end
 
   @doc """
@@ -87,11 +87,14 @@ defmodule SalesforceApi.Data.Sobjects do
 
   @doc """
   Submits a soql query to the SF API endpoint.
-  
+
   ## Options
-  - all: if set to true will retrieve all records.
+  - records: if set to all will retrieve all records.
   - file: if set results will be saved in JSON format to the 
   file path specified.
+  - fields: if set to all the behavior of the function will change.
+  The query string will be given an implicit SELECT predicate that 
+  contains all the known fields for the table.
   """
   @spec make_soql_query(client :: OauthClient.t(), query_string :: String.t(), opts :: list) ::
           {:ok, term} | {:error, term} | :ok
@@ -101,35 +104,144 @@ defmodule SalesforceApi.Data.Sobjects do
         opts \\ []
       )
       when request != nil and is_binary(qp) and is_binary(query_string) do
-    opts = Keyword.merge([file: nil, all: false], opts)
+    opts = Keyword.merge([file: nil, records: nil], opts) |> Map.new()
 
-    case {opts[:file], opts[:all]} do
-      {nil, false} ->
-        with {:ok, response} <- Req.get(request, url: qp, params: [q: query_string]),
-             do: {:ok, response.body}
+    %{
+      opts: opts,
+      error: false,
+      client: client,
+      fetched: false,
+      query_string: query_string
+    }
+    |> maybe_query_all()
+    |> maybe_all_results()
+    |> maybe_first_results()
+    |> caller_feedback()
+  end
 
-      {nil, true} ->
-        make_soql_query_all(client, query_string)
+  def maybe_query_all(
+        %{opts: %{fields: :all}, query_string: query_string, error: false, client: client} =
+          process
+      ) do
+    case get_table_field_names(client, extract_table(query_string)) do
+      {:error, error_message} ->
+        process
+        |> Map.put(:error, true)
+        |> Map.put(:error_message, error_message)
 
-      {file_name, false} ->
-        with {:ok, response} <- Req.get(request, url: qp, params: [q: query_string]) do
-          File.write(file_name, Jason.encode!(response.body))
-        end
-
-      {file_name, true} ->
-        with {:ok, result} <- make_soql_query_all(client, query_string) do
-          File.write(file_name, Jason.encode!(result))
-        end
+      {:ok, fields} ->
+        process
+        |> Map.update!(:query_string, &add_select_clause_to_query(&1, fields))
     end
+  end
+
+  def maybe_query_all(process), do: process
+
+  def maybe_all_results(
+        %{
+          opts: %{records: :all},
+          fetched: false,
+          query_string: query_string,
+          error: false,
+          client: client
+        } = process
+      ) do
+    case make_soql_query_all(client, query_string) do
+      {:ok, result} ->
+        process
+        |> Map.put(:fetched, true)
+        |> Map.put(:results, result)
+        |> IO.inspect(label: "results added")
+
+      {:error, message} ->
+        process
+        |> Map.put(:fetched, true)
+        |> Map.put(:error, true)
+        |> Map.put(:error_message, message)
+    end
+  end
+
+  def maybe_all_results(process), do: process
+
+  def maybe_first_results(
+        %{
+          opts: %{records: nil},
+          query_string: query_string,
+          error: false,
+          client: client,
+          fetched: false
+        } = process
+      ) do
+    case Req.get(client.base_request, url: client.query_path, params: [q: query_string]) do
+      {:ok, result} ->
+        process
+        |> Map.put(:fetched, true)
+        |> Map.put(:results, result.body["records"])
+
+      {:error, message} ->
+        process
+        |> Map.put(:fetched, true)
+        |> Map.put(:error, true)
+        |> Map.put(:error_message, message)
+    end
+  end
+
+  def maybe_first_results(process), do: process
+
+  def maybe_record_results(
+        %{opts: %{file_name: file_name}, fetched: false, results: results, error: false} = process
+      )
+      when not is_nil(file_name) do
+    case File.write(file_name, Jason.decode!(results)) do
+      :ok ->
+        process
+
+      {:error, error_message} ->
+        process
+        |> Map.put(:error, true)
+        |> Map.put(:error_message, error_message)
+    end
+  end
+
+  def maybe_record_results(process), do: process
+
+  def caller_feedback(%{error: true, error_message: error_message}), do: {:error, error_message}
+
+  def caller_feedback(%{opts: %{file_name: file_name}}) when not is_nil(file_name),
+    do: {:ok, "results written to #{file_name}"}
+
+  def caller_feedback(%{results: result}), do: {:ok, result}
+
+  def get_table_field_names(client, table_name) do
+    with {:ok, description} <- describe_object(client, table_name) do
+      description["fields"]
+      |> Enum.map(& &1["name"])
+      |> then(&{:ok, &1})
+    end
+  end
+
+  def extract_table(query_string) do
+    query_string
+    |> String.split(" ")
+    |> Enum.drop_while(&(&1 != "FROM"))
+    |> Enum.at(1)
+  end
+
+  def field_names_to_clause(field_names) do
+    "SELECT #{Enum.join(field_names, ",")}"
+  end
+
+  def add_select_clause_to_query(query, fields) do
+    "#{field_names_to_clause(fields)} #{query}"
   end
 
   @spec make_soql_query_all(client :: OauthClient.t(), query_string :: String.t()) ::
           {:ok, list} | {:error, term}
   defp make_soql_query_all(
-        %OauthClient{base_request: request, query_path: qp} = client,
-        query_string
-      )
-      when request != nil and is_binary(qp) and is_binary(query_string) do
+         %OauthClient{base_request: request, query_path: qp} = client,
+         query_string
+       )
+       when request != nil and is_binary(qp) and is_binary(query_string) do
     with {:ok, init_body} <- make_soql_query(client, query_string) do
       results =
         init_body
@@ -152,6 +264,7 @@ defmodule SalesforceApi.Data.Sobjects do
           end
         end)
         |> Enum.to_list()
+        |> List.flatten()
 
       case List.last(results) do
         {:error, message} ->
