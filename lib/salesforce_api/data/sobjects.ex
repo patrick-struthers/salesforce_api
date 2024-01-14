@@ -105,6 +105,11 @@ defmodule SalesforceApi.Data.Sobjects do
          do: {:ok, response.body}
   end
 
+  
+  @doc """
+  Submits a soql query to the SF API endpoint and 
+  retrieves all matching results.
+  """
   def make_soql_query(
         %OauthClient{base_request: request, query_path: qp} = client,
         query_string,
