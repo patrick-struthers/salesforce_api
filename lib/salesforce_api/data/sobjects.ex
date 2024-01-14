@@ -87,6 +87,8 @@ defmodule SalesforceApi.Data.Sobjects do
 
   @doc """
   Submits a soql query to the SF API endpoint.
+
+  Will only retrieve the first page of results for the query.
   """
   @spec make_soql_query(client :: OauthClient.t(), query_string :: String.t()) ::
           {:ok, map} | {:error, term}
@@ -96,56 +98,51 @@ defmodule SalesforceApi.Data.Sobjects do
          do: {:ok, response.body}
   end
 
-  
   @doc """
   Submits a soql query to the SF API endpoint and 
   retrieves all matching results.
+
+  If any of the requests that result from the query return an error, 
+  than this function will raise.
   """
-  def make_soql_query(
+  @spec make_soql_query!(client :: OauthClient.t(), query_string :: String.t(), :all) :: list
+  def make_soql_query!(
         %OauthClient{base_request: request, query_path: qp} = client,
         query_string,
         :all
       )
       when request != nil and is_binary(qp) and is_binary(query_string) do
-    get_all_records(client, fn client ->
-      make_soql_query(client, query_string)
+
+    init_body =
+      case make_soql_query(client, query_string) do
+        {:error, error_message} ->
+          raise(error_message)
+
+        {:ok, body} ->
+          body
+      end
+
+    init_body
+    |> Stream.unfold(fn body ->
+      #if there are more records the response body 
+      #will have done set to false and a next_records
+      #url will be present.
+      case body do
+        %{"done" => true, "records" => new_records} ->
+          {new_records, :stop}
+
+        %{"done" => false, "records" => new_records, "nextRecordsUrl" => next_record_url} ->
+          {new_records, Req.get!(request, url: next_record_url).body}
+
+        :stop ->
+          nil
+
+        _ ->
+          raise("invalid response received from SF API: #{inspect(body)}")
+      end
     end)
-  end
-
-  @doc """
-  Fetches all records for a table.
-  """
-  def get_all_records(client = %OauthClient{}, fetch_function) do
-    get_all_records(client, fetch_function, [])
-  end
-
-  def get_all_records(client, fetch_function, [])
-      when is_function(fetch_function) do
-    {:ok, res} = fetch_function.(client)
-
-    case res do
-      %{"done" => true, "records" => new_records} ->
-        new_records
-
-      %{"done" => false, "records" => new_records, "nextRecordsUrl" => next_record_url} ->
-        get_all_records(client, next_record_url, new_records)
-
-      _ ->
-        raise("invalid response received from SF API: #{inspect(res)}")
-    end
-  end
-
-  def get_all_records(client = %OauthClient{base_request: request}, records_url, records)
-      when is_binary(records_url) do
-    res = Req.get!(request, url: records_url)
-
-    case res.body do
-      %{"done" => true, "records" => new_records} ->
-        new_records ++ records
-
-      %{"done" => false, "records" => new_records, "nextRecordsUrl" => next_records_url} ->
-        get_all_records(client, next_records_url, new_records ++ records)
-    end
+    |> Enum.to_list()
+    |> List.flatten()
   end
 
   defp extract_names(object_list) do
