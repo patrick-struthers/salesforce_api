@@ -90,59 +90,78 @@ defmodule SalesforceApi.Data.Sobjects do
 
   Will only retrieve the first page of results for the query.
   """
-  @spec make_soql_query(client :: OauthClient.t(), query_string :: String.t()) ::
-          {:ok, map} | {:error, term}
-  def make_soql_query(%OauthClient{base_request: request, query_path: qp}, query_string)
+  @spec make_soql_query(client :: OauthClient.t(), query_string :: String.t(), opts :: list) ::
+          {:ok, term} | {:error, term} | :ok
+  def make_soql_query(
+        %OauthClient{base_request: request, query_path: qp} = client,
+        query_string,
+        opts \\ []
+      )
       when request != nil and is_binary(qp) and is_binary(query_string) do
-    with {:ok, response} <- Req.get(request, url: qp, params: [q: query_string]),
-         do: {:ok, response.body}
+    opts = Keyword.merge([file: nil, all: false], opts)
+
+    case {opts[:file], opts[:all]} do
+      {nil, false} ->
+        with {:ok, response} <- Req.get(request, url: qp, params: [q: query_string]),
+             do: {:ok, response.body}
+
+      {nil, true} ->
+        make_soql_query_all(client, query_string)
+
+      {file_name, false} ->
+        with {:ok, response} <- Req.get(request, url: qp, params: [q: query_string]) do
+          File.write(file_name, Jason.encode!(response.body))
+        end
+
+      {file_name, true} ->
+        with {:ok, result} <- make_soql_query_all(client, query_string) do
+          File.write(file_name, Jason.encode!(result))
+        end
+    end
   end
 
   @doc """
   Submits a soql query to the SF API endpoint and 
   retrieves all matching results.
-
-  If any of the requests that result from the query return an error, 
-  than this function will raise.
   """
-  @spec make_soql_query!(client :: OauthClient.t(), query_string :: String.t(), :all) :: list
-  def make_soql_query!(
+  @spec make_soql_query_all(client :: OauthClient.t(), query_string :: String.t()) ::
+          {:ok, list} | {:error, term}
+  def make_soql_query_all(
         %OauthClient{base_request: request, query_path: qp} = client,
-        query_string,
-        :all
+        query_string
       )
       when request != nil and is_binary(qp) and is_binary(query_string) do
+    with {:ok, init_body} <- make_soql_query(client, query_string) do
+      results =
+        init_body
+        |> Stream.unfold(fn body ->
+          # if there are more records the response body 
+          # will have done set to false and a next_records
+          # url will be present.
+          case body do
+            %{"done" => true, "records" => new_records} ->
+              {new_records, :stop}
 
-    init_body =
-      case make_soql_query(client, query_string) do
-        {:error, error_message} ->
-          raise(error_message)
+            %{"done" => false, "records" => new_records, "nextRecordsUrl" => next_record_url} ->
+              {new_records, Req.get!(request, url: next_record_url).body}
 
-        {:ok, body} ->
-          body
-      end
+            :stop ->
+              nil
 
-    init_body
-    |> Stream.unfold(fn body ->
-      #if there are more records the response body 
-      #will have done set to false and a next_records
-      #url will be present.
-      case body do
-        %{"done" => true, "records" => new_records} ->
-          {new_records, :stop}
+            invalid ->
+              {{:error, invalid}, :stop}
+          end
+        end)
+        |> Enum.to_list()
 
-        %{"done" => false, "records" => new_records, "nextRecordsUrl" => next_record_url} ->
-          {new_records, Req.get!(request, url: next_record_url).body}
-
-        :stop ->
-          nil
+      case List.last(results) do
+        {:error, message} ->
+          {:error, %{message: message, fetched_before_error: Enum.drop(results, -1)}}
 
         _ ->
-          raise("invalid response received from SF API: #{inspect(body)}")
+          {:ok, results}
       end
-    end)
-    |> Enum.to_list()
-    |> List.flatten()
+    end
   end
 
   defp extract_names(object_list) do
