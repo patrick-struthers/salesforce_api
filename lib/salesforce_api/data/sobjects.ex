@@ -88,13 +88,13 @@ defmodule SalesforceApi.Data.Sobjects do
   end
 
   @type process :: %{
-          opts: map,
-          error: boolean,
           client: map,
           fetched: boolean,
           query_string: String.t(),
-          error_message: String.t() | nil,
-          results: map | nil
+          results: map | nil,
+          file: binary | nil,
+          records: :all | nil,
+          fields: :all | nil
         }
   @doc """
   Submits a soql query to the SF API endpoint.
@@ -115,111 +115,80 @@ defmodule SalesforceApi.Data.Sobjects do
         opts \\ []
       )
       when request != nil and is_binary(qp) and is_binary(query_string) do
-    opts = Keyword.merge([file: nil, records: nil, fields: nil], opts) |> Map.new()
+    process =
+      Keyword.merge([file: nil, records: nil, fields: nil], opts)
+      |> Map.new()
+      |> Map.merge(%{client: client, fetched: false, query_string: query_string, results: nil})
 
-    %{
-      opts: opts,
-      error: false,
-      client: client,
-      fetched: false,
-      query_string: query_string,
-      results: nil,
-      error_message: nil
-    }
+    process
     |> ExecuteIf.match(
-      match: %{opts: %{fields: :all}, query_string: _, error: false},
+      match: %{fields: :all, query_string: _},
       function: &query_all/1
     )
     |> ExecuteIf.match(
-      match: %{opts: %{records: :all}, error: false, fetched: false},
+      match: %{records: :all, fetched: false},
       function: &all_results/1
     )
     |> ExecuteIf.match(
-      match: %{opts: %{records: nil}, error: false, fetched: false},
+      match: %{records: nil, fetched: false},
       function: &first_results/1
     )
     |> ExecuteIf.match(
-      match: %{opts: %{file: file_path}, error: false, fetched: true},
+      match: %{file: file_path, fetched: true},
       when: not is_nil(file_path),
       function: &record_results/1
     )
     |> then(&caller_feedback/1)
   end
 
-  @spec query_all(process) :: process
+  @spec query_all(process) :: process | {:error, term}
   defp query_all(%{query_string: query_string, client: client} = process) do
-    case get_table_field_names(client, extract_table(query_string)) do
-      {:error, error_message} ->
-        process
-        |> Map.put(:error, true)
-        |> Map.put(:error_message, error_message)
-
-      {:ok, fields} ->
-        process
-        |> Map.update!(:query_string, &add_select_clause_to_query(&1, fields))
+    with {:ok, fields} <- get_table_field_names(client, extract_table(query_string)) do
+      process
+      |> Map.update!(:query_string, &add_select_clause_to_query(&1, fields))
     end
   end
 
-  @spec all_results(process) :: process
+  @spec all_results(process) :: process | {:error, term}
   defp all_results(
          %{
            query_string: query_string,
            client: client
          } = process
        ) do
-    case make_soql_query_all(client, query_string) do
-      {:ok, result} ->
-        process
-        |> Map.put(:fetched, true)
-        |> Map.put(:results, result)
-        |> IO.inspect(label: "results added")
-
-      {:error, message} ->
-        process
-        |> Map.put(:fetched, true)
-        |> Map.put(:error, true)
-        |> Map.put(:error_message, message)
+    with {:ok, result} <- make_soql_query_all(client, query_string) do
+      process
+      |> Map.put(:fetched, true)
+      |> Map.put(:results, result)
     end
   end
 
-  @spec first_results(process) :: process
+  @spec first_results(process) :: process | {:error, term}
   defp first_results(
          %{
            query_string: query_string,
            client: client
          } = process
        ) do
-    case Req.get(client.base_request, url: client.query_path, params: [q: query_string]) do
-      {:ok, result} ->
-        process
-        |> Map.put(:fetched, true)
-        |> Map.put(:results, result.body["records"])
-
-      {:error, message} ->
-        process
-        |> Map.put(:fetched, true)
-        |> Map.put(:error, true)
-        |> Map.put(:error_message, message)
+    with {:ok, result} <-
+           Req.get(client.base_request, url: client.query_path, params: [q: query_string]) do
+      process
+      |> Map.put(:fetched, true)
+      |> Map.put(:results, result.body["records"])
     end
   end
 
-  @spec record_results(process) :: process
-  defp record_results(%{opts: %{file: file_name}, results: results} = process) do
-    case File.write(file_name, Jason.encode!(results)) do
-      :ok ->
-        process
-
-      {:error, error_message} ->
-        process
-        |> Map.put(:error, true)
-        |> Map.put(:error_message, error_message)
+  @spec record_results(process) :: process | {:error, term}
+  defp record_results(%{file: file_name, results: results} = process) do
+    with :ok <- File.write(file_name, Jason.encode!(results)) do
+      process
     end
   end
 
   @spec caller_feedback(process) :: {:error, term} | {:ok, term}
-  defp caller_feedback(%{error: true, error_message: error_message}), do: {:error, error_message}
+  defp caller_feedback({:error, error_message}), do: {:error, error_message}
 
-  defp caller_feedback(%{opts: %{file: file_name}}) when not is_nil(file_name),
+  defp caller_feedback(%{file: file_name}) when not is_nil(file_name),
     do: {:ok, "results written to #{file_name}"}
 
   defp caller_feedback(%{results: result}), do: {:ok, result}
@@ -273,7 +242,6 @@ defmodule SalesforceApi.Data.Sobjects do
               nil
 
             invalid ->
-              IO.inspect(invalid, label: "this didn't match")
               {{:error, invalid}, :stop}
           end
         end)

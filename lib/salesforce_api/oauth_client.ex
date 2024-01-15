@@ -119,7 +119,6 @@ defmodule SalesforceApi.OauthClient do
         auth: {:bearer, token}
       )
     )
-    |> IO.inspect(label: "with base request")
   end
 
   @doc """
