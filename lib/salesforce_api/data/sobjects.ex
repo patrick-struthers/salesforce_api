@@ -116,9 +116,10 @@ defmodule SalesforceApi.Data.Sobjects do
     |> maybe_query_all()
     |> maybe_all_results()
     |> maybe_first_results()
+    |> maybe_record_results()
     |> caller_feedback()
   end
-
+  
   defp maybe_query_all(
         %{opts: %{fields: :all}, query_string: query_string, error: false, client: client} =
           process
