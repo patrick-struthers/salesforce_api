@@ -5,6 +5,8 @@ defmodule SalesforceApi.Data.Sobjects do
   """
 
   alias SalesforceApi.OauthClient
+  require SalesforceApi.ExecuteIf
+  alias SalesforceApi.ExecuteIf
 
   @doc """
   Retrieves a list of all available objects in the SF API that are **visible to your user**.   
@@ -124,18 +126,28 @@ defmodule SalesforceApi.Data.Sobjects do
       results: nil,
       error_message: nil
     }
-    |> maybe_query_all()
-    |> maybe_all_results()
-    |> maybe_first_results()
-    |> maybe_record_results()
-    |> caller_feedback()
+    |> ExecuteIf.match(
+      match: %{opts: %{fields: :all}, query_string: _, error: false},
+      function: &query_all/1
+    )
+    |> ExecuteIf.match(
+      match: %{opts: %{records: :all}, error: false, fetched: false},
+      function: &all_results/1
+    )
+    |> ExecuteIf.match(
+      match: %{opts: %{records: nil}, error: false, fetched: false},
+      function: &first_results/1
+    )
+    |> ExecuteIf.match(
+      match: %{opts: %{file: file_path}, error: false, fetched: true},
+      when: not is_nil(file_path),
+      function: &record_results/1
+    )
+    |> then(&caller_feedback/1)
   end
 
-  @spec maybe_query_all(process) :: process
-  defp maybe_query_all(
-         %{opts: %{fields: :all}, query_string: query_string, error: false, client: client} =
-           process
-       ) do
+  @spec query_all(process) :: process
+  defp query_all(%{query_string: query_string, client: client} = process) do
     case get_table_field_names(client, extract_table(query_string)) do
       {:error, error_message} ->
         process
@@ -148,15 +160,10 @@ defmodule SalesforceApi.Data.Sobjects do
     end
   end
 
-  defp maybe_query_all(process), do: process
-
-  @spec maybe_all_results(process) :: process
-  defp maybe_all_results(
+  @spec all_results(process) :: process
+  defp all_results(
          %{
-           opts: %{records: :all},
-           fetched: false,
            query_string: query_string,
-           error: false,
            client: client
          } = process
        ) do
@@ -175,16 +182,11 @@ defmodule SalesforceApi.Data.Sobjects do
     end
   end
 
-  defp maybe_all_results(process), do: process
-
-  @spec maybe_first_results(process) :: process
-  defp maybe_first_results(
+  @spec first_results(process) :: process
+  defp first_results(
          %{
-           opts: %{records: nil},
            query_string: query_string,
-           error: false,
-           client: client,
-           fetched: false
+           client: client
          } = process
        ) do
     case Req.get(client.base_request, url: client.query_path, params: [q: query_string]) do
@@ -201,13 +203,8 @@ defmodule SalesforceApi.Data.Sobjects do
     end
   end
 
-  defp maybe_first_results(process), do: process
-
-  @spec maybe_record_results(process) :: process
-  defp maybe_record_results(
-         %{opts: %{file: file_name}, fetched: true, results: results, error: false} = process
-       )
-       when not is_nil(file_name) do
+  @spec record_results(process) :: process
+  defp record_results(%{opts: %{file: file_name}, results: results} = process) do
     case File.write(file_name, Jason.encode!(results)) do
       :ok ->
         process
@@ -218,8 +215,6 @@ defmodule SalesforceApi.Data.Sobjects do
         |> Map.put(:error_message, error_message)
     end
   end
-
-  defp maybe_record_results(process), do: process
 
   @spec caller_feedback(process) :: {:error, term} | {:ok, term}
   defp caller_feedback(%{error: true, error_message: error_message}), do: {:error, error_message}
