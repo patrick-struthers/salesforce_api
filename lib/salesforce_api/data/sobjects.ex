@@ -85,6 +85,15 @@ defmodule SalesforceApi.Data.Sobjects do
     |> then(&File.write!(file_path, &1))
   end
 
+  @type process :: %{
+          opts: map,
+          error: boolean,
+          client: map,
+          fetched: boolean,
+          query_string: String.t(),
+          error_message: String.t() | nil,
+          results: map | nil
+        }
   @doc """
   Submits a soql query to the SF API endpoint.
 
@@ -111,7 +120,9 @@ defmodule SalesforceApi.Data.Sobjects do
       error: false,
       client: client,
       fetched: false,
-      query_string: query_string
+      query_string: query_string,
+      results: nil,
+      error_message: nil
     }
     |> maybe_query_all()
     |> maybe_all_results()
@@ -119,11 +130,12 @@ defmodule SalesforceApi.Data.Sobjects do
     |> maybe_record_results()
     |> caller_feedback()
   end
-  
+
+  @spec maybe_query_all(process) :: process
   defp maybe_query_all(
-        %{opts: %{fields: :all}, query_string: query_string, error: false, client: client} =
-          process
-      ) do
+         %{opts: %{fields: :all}, query_string: query_string, error: false, client: client} =
+           process
+       ) do
     case get_table_field_names(client, extract_table(query_string)) do
       {:error, error_message} ->
         process
@@ -138,15 +150,16 @@ defmodule SalesforceApi.Data.Sobjects do
 
   defp maybe_query_all(process), do: process
 
+  @spec maybe_all_results(process) :: process
   defp maybe_all_results(
-        %{
-          opts: %{records: :all},
-          fetched: false,
-          query_string: query_string,
-          error: false,
-          client: client
-        } = process
-      ) do
+         %{
+           opts: %{records: :all},
+           fetched: false,
+           query_string: query_string,
+           error: false,
+           client: client
+         } = process
+       ) do
     case make_soql_query_all(client, query_string) do
       {:ok, result} ->
         process
@@ -164,15 +177,16 @@ defmodule SalesforceApi.Data.Sobjects do
 
   defp maybe_all_results(process), do: process
 
+  @spec maybe_first_results(process) :: process
   defp maybe_first_results(
-        %{
-          opts: %{records: nil},
-          query_string: query_string,
-          error: false,
-          client: client,
-          fetched: false
-        } = process
-      ) do
+         %{
+           opts: %{records: nil},
+           query_string: query_string,
+           error: false,
+           client: client,
+           fetched: false
+         } = process
+       ) do
     case Req.get(client.base_request, url: client.query_path, params: [q: query_string]) do
       {:ok, result} ->
         process
@@ -189,10 +203,11 @@ defmodule SalesforceApi.Data.Sobjects do
 
   defp maybe_first_results(process), do: process
 
+  @spec maybe_record_results(process) :: process
   defp maybe_record_results(
-        %{opts: %{file: file_name}, fetched: true, results: results, error: false} = process
-      )
-      when not is_nil(file_name) do
+         %{opts: %{file: file_name}, fetched: true, results: results, error: false} = process
+       )
+       when not is_nil(file_name) do
     case File.write(file_name, Jason.encode!(results)) do
       :ok ->
         process
@@ -206,6 +221,7 @@ defmodule SalesforceApi.Data.Sobjects do
 
   defp maybe_record_results(process), do: process
 
+  @spec caller_feedback(process) :: {:error, term} | {:ok, term}
   defp caller_feedback(%{error: true, error_message: error_message}), do: {:error, error_message}
 
   defp caller_feedback(%{opts: %{file: file_name}}) when not is_nil(file_name),
@@ -243,9 +259,10 @@ defmodule SalesforceApi.Data.Sobjects do
          query_string
        )
        when request != nil and is_binary(qp) and is_binary(query_string) do
-    with {:ok, init_body} <- make_soql_query(client, query_string) do
+    with {:ok, init_resp} <-
+           Req.get(client.base_request, url: client.query_path, params: [q: query_string]) do
       results =
-        init_body
+        init_resp.body
         |> Stream.unfold(fn body ->
           # if there are more records the response body 
           # will have done set to false and a next_records
@@ -261,6 +278,7 @@ defmodule SalesforceApi.Data.Sobjects do
               nil
 
             invalid ->
+              IO.inspect(invalid, label: "this didn't match")
               {{:error, invalid}, :stop}
           end
         end)
