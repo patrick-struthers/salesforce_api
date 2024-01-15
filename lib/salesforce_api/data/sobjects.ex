@@ -104,7 +104,7 @@ defmodule SalesforceApi.Data.Sobjects do
         opts \\ []
       )
       when request != nil and is_binary(qp) and is_binary(query_string) do
-    opts = Keyword.merge([file: nil, records: nil], opts) |> Map.new()
+    opts = Keyword.merge([file: nil, records: nil, fields: nil], opts) |> Map.new()
 
     %{
       opts: opts,
@@ -190,10 +190,10 @@ defmodule SalesforceApi.Data.Sobjects do
   defp maybe_first_results(process), do: process
 
   defp maybe_record_results(
-        %{opts: %{file_name: file_name}, fetched: false, results: results, error: false} = process
+        %{opts: %{file: file_name}, fetched: true, results: results, error: false} = process
       )
       when not is_nil(file_name) do
-    case File.write(file_name, Jason.decode!(results)) do
+    case File.write(file_name, Jason.encode!(results)) do
       :ok ->
         process
 
@@ -208,7 +208,7 @@ defmodule SalesforceApi.Data.Sobjects do
 
   defp caller_feedback(%{error: true, error_message: error_message}), do: {:error, error_message}
 
-  defp caller_feedback(%{opts: %{file_name: file_name}}) when not is_nil(file_name),
+  defp caller_feedback(%{opts: %{file: file_name}}) when not is_nil(file_name),
     do: {:ok, "results written to #{file_name}"}
 
   defp caller_feedback(%{results: result}), do: {:ok, result}
