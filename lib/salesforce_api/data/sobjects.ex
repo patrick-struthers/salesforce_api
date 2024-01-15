@@ -119,7 +119,7 @@ defmodule SalesforceApi.Data.Sobjects do
     |> caller_feedback()
   end
 
-  def maybe_query_all(
+  defp maybe_query_all(
         %{opts: %{fields: :all}, query_string: query_string, error: false, client: client} =
           process
       ) do
@@ -135,9 +135,9 @@ defmodule SalesforceApi.Data.Sobjects do
     end
   end
 
-  def maybe_query_all(process), do: process
+  defp maybe_query_all(process), do: process
 
-  def maybe_all_results(
+  defp maybe_all_results(
         %{
           opts: %{records: :all},
           fetched: false,
@@ -161,9 +161,9 @@ defmodule SalesforceApi.Data.Sobjects do
     end
   end
 
-  def maybe_all_results(process), do: process
+  defp maybe_all_results(process), do: process
 
-  def maybe_first_results(
+  defp maybe_first_results(
         %{
           opts: %{records: nil},
           query_string: query_string,
@@ -186,9 +186,9 @@ defmodule SalesforceApi.Data.Sobjects do
     end
   end
 
-  def maybe_first_results(process), do: process
+  defp maybe_first_results(process), do: process
 
-  def maybe_record_results(
+  defp maybe_record_results(
         %{opts: %{file_name: file_name}, fetched: false, results: results, error: false} = process
       )
       when not is_nil(file_name) do
@@ -203,16 +203,16 @@ defmodule SalesforceApi.Data.Sobjects do
     end
   end
 
-  def maybe_record_results(process), do: process
+  defp maybe_record_results(process), do: process
 
-  def caller_feedback(%{error: true, error_message: error_message}), do: {:error, error_message}
+  defp caller_feedback(%{error: true, error_message: error_message}), do: {:error, error_message}
 
-  def caller_feedback(%{opts: %{file_name: file_name}}) when not is_nil(file_name),
+  defp caller_feedback(%{opts: %{file_name: file_name}}) when not is_nil(file_name),
     do: {:ok, "results written to #{file_name}"}
 
-  def caller_feedback(%{results: result}), do: {:ok, result}
+  defp caller_feedback(%{results: result}), do: {:ok, result}
 
-  def get_table_field_names(client, table_name) do
+  defp get_table_field_names(client, table_name) do
     with {:ok, description} <- describe_object(client, table_name) do
       description["fields"]
       |> Enum.map(& &1["name"])
@@ -220,18 +220,18 @@ defmodule SalesforceApi.Data.Sobjects do
     end
   end
 
-  def extract_table(query_string) do
+  defp extract_table(query_string) do
     query_string
     |> String.split(" ")
     |> Enum.drop_while(&(&1 != "FROM"))
     |> Enum.at(1)
   end
 
-  def field_names_to_clause(field_names) do
+  defp field_names_to_clause(field_names) do
     "SELECT #{Enum.join(field_names, ",")}"
   end
 
-  def add_select_clause_to_query(query, fields) do
+  defp add_select_clause_to_query(query, fields) do
     "#{field_names_to_clause(fields)} #{query}"
   end
 
