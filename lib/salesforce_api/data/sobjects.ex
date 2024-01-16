@@ -14,7 +14,9 @@ defmodule SalesforceApi.Data.Sobjects do
   @spec get_available_objects(client :: OauthClient.t()) :: {:ok, map} | {:error, term}
   def get_available_objects(%OauthClient{base_request: request, sobject_path: sop})
       when request != nil and is_binary(sop) do
-    with {:ok, resp} <- Req.get(request, url: sop), do: {:ok, resp.body}
+    with {:ok, resp} <- Req.get(request, url: sop),
+         {:ok, resp} <- is_success(resp),
+         do: {:ok, resp.body}
   end
 
   @doc """
@@ -57,8 +59,9 @@ defmodule SalesforceApi.Data.Sobjects do
   @spec describe_object(client :: OauthClient.t(), field_name :: String.t()) ::
           {:ok, map} | {:error, term}
   def describe_object(%OauthClient{base_request: request, sobject_path: sop}, field_name) do
-    with {:ok, desc} <- Req.request(request, url: Path.join([sop, field_name, "describe"])),
-         do: {:ok, desc.body}
+    with {:ok, resp} <- Req.request(request, url: Path.join([sop, field_name, "describe"])),
+         {:ok, resp} <- is_success(resp),
+         do: {:ok, resp.body}
   end
 
   @doc """
@@ -171,7 +174,8 @@ defmodule SalesforceApi.Data.Sobjects do
          } = process
        ) do
     with {:ok, result} <-
-           Req.get(client.base_request, url: client.query_path, params: [q: query_string]) do
+           Req.get(client.base_request, url: client.query_path, params: [q: query_string]),
+         {:ok, result} <- is_success(result) do
       process
       |> Map.put(:fetched, true)
       |> Map.put(:results, result.body["records"])
@@ -180,7 +184,7 @@ defmodule SalesforceApi.Data.Sobjects do
 
   @spec record_results(process) :: process | {:error, term}
   defp record_results(%{file: file_name, results: results} = process) do
-    with :ok <- File.write(file_name, Jason.encode!(results)) do
+    with :ok <- File.write(file_name, Jason.encode!(results, pretty: true)) do
       process
     end
   end
@@ -224,7 +228,8 @@ defmodule SalesforceApi.Data.Sobjects do
        )
        when request != nil and is_binary(qp) and is_binary(query_string) do
     with {:ok, init_resp} <-
-           Req.get(client.base_request, url: client.query_path, params: [q: query_string]) do
+           Req.get(client.base_request, url: client.query_path, params: [q: query_string]),
+         {:ok, init_resp} <- is_success(init_resp) do
       results =
         init_resp.body
         |> Stream.unfold(fn body ->
@@ -236,7 +241,10 @@ defmodule SalesforceApi.Data.Sobjects do
               {new_records, :stop}
 
             %{"done" => false, "records" => new_records, "nextRecordsUrl" => next_record_url} ->
-              {new_records, Req.get!(request, url: next_record_url).body}
+              with {:ok, resp} <- Req.get(request, url: next_record_url),
+                   {:ok, resp} <- is_success(resp) do
+                {new_records, resp.body}
+              end
 
             :stop ->
               nil
@@ -255,6 +263,15 @@ defmodule SalesforceApi.Data.Sobjects do
         _ ->
           {:ok, results}
       end
+    end
+  end
+
+  @spec is_success(Req.Response.t()) :: {:ok, Req.Response.t()} | {:error, term}
+  defp is_success(%{status: status} = response) do
+    if status in 200..299 do
+      {:ok, response}
+    else
+      {:error, {:failed_http_request, response}}
     end
   end
 
